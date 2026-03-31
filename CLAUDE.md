@@ -20,7 +20,8 @@ Three components:
 ## Key Data Sources (Claude Code standard)
 
 - `~/.claude/sessions/{PID}.json` — session registry. Named sessions include `"name"` field.
-- `https://api.anthropic.com/oauth/usage` — 5h/7d usage (OAuth token from system keychain).
+- `~/.claude/.credentials.json` — OAuth token (cross-platform). Falls back to macOS Keychain, then `CC_MATRIX_API_KEY` env var.
+- `https://api.anthropic.com/oauth/usage` — 5h/7d usage via the above token.
 - `/tmp/claude-waiting-{sessionId}` — flag files written by our hooks.
 
 ## Display

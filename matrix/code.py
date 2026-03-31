@@ -17,7 +17,6 @@ Priority pinning: waiting sessions always pinned to top slots.
 
 import os
 import time
-import json
 import board
 import displayio
 import framebufferio
@@ -30,7 +29,6 @@ import ssl
 from adafruit_bitmap_font import bitmap_font
 from adafruit_display_text import label
 import adafruit_requests
-import adafruit_connection_manager
 
 # ---------------------------------------------------------------------------
 # Configuration from settings.toml
@@ -506,8 +504,10 @@ def main():
         # --- Cycle working sessions ---
         if not is_flashing and now - last_cycle > CYCLE_SPEED:
             last_cycle = now
+            waiting = [s for s in current_sessions if s["status"] == "waiting"]
             working = [s for s in current_sessions if s["status"] == "working"]
-            if len(working) > SESSION_SLOTS:
+            remaining_slots = max(0, SESSION_SLOTS - len(waiting))
+            if len(working) > remaining_slots:
                 display_offset += 1
                 # Re-render visible sessions
                 visible = get_visible_sessions()
