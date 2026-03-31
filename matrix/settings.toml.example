@@ -1,0 +1,16 @@
+# cc-matrix-display — Matrix Portal S3 configuration
+# Copy this to settings.toml and fill in your values.
+
+# WiFi credentials
+WIFI_SSID = "your-network-name"
+WIFI_PASSWORD = "your-wifi-password"
+
+# Host server URL (your Mac's hostname or IP)
+# Find your Mac's IP: System Settings > Network, or run: ipconfig getifaddr en0
+CC_MATRIX_URL = "http://your-mac.local:8321"
+
+# Shared secret (must match host/config.json "secret" value)
+CC_MATRIX_SECRET = "your-shared-secret"
+
+# Poll interval in seconds (how often to check for updates)
+POLL_INTERVAL_S = "5"

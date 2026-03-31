@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Config (contains secrets)
+host/config.json
+matrix/settings.toml
+
+# CircuitPython
+matrix/lib/
+*.mpy
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/
