@@ -60,7 +60,7 @@ SESSION_ROW_HEIGHT = 9  # per row
 SCROLL_SPEED = 0.3  # seconds between character scroll steps
 PULSE_SPEED = 0.5  # seconds between pulse toggles
 CYCLE_SPEED = 4.0  # seconds between session group rotation
-FLASH_DURATION = 1.5  # seconds for full-screen alert
+FLASH_DURATION = 5.0  # seconds for full-screen alert
 
 # Colors (RGB 565 compatible — use 24-bit hex, displayio handles conversion)
 COLOR_GREEN = 0x00CC00
