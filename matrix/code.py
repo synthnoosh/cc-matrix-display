@@ -475,6 +475,7 @@ def main():
     flash_start = 0
     pulse_on = True
     is_flashing = False
+    poll_failures = 0
 
     while True:
         now = time.monotonic()
@@ -489,6 +490,7 @@ def main():
             last_poll = now
             data = fetch_status()
             if data:
+                poll_failures = 0
                 transition = update_display(data)
                 if transition and not is_flashing:
                     show_flash(transition)
@@ -497,12 +499,17 @@ def main():
                 if not data.get("sessions"):
                     show_no_sessions()
             else:
-                # Check WiFi
-                if not esp.is_connected:
-                    show_offline()
-                    connect_wifi()
-                    if esp.is_connected:
-                        init_http()
+                poll_failures += 1
+                # Only show offline after sustained failures
+                if poll_failures >= 5:
+                    if not esp.is_connected:
+                        show_offline()
+                        connect_wifi()
+                        if esp.is_connected:
+                            init_http()
+                            poll_failures = 0
+                    else:
+                        show_offline()
 
         # --- Scroll long names (text-window, never spills past left border) ---
         if not is_flashing and now - last_scroll > SCROLL_SPEED:
