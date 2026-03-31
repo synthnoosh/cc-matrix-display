@@ -41,6 +41,8 @@ POLL_INTERVAL = int(os.getenv("POLL_INTERVAL_S", "5"))
 WIFI_SSID = os.getenv("WIFI_SSID", "")
 WIFI_PASSWORD = os.getenv("WIFI_PASSWORD", "")
 
+STATUS_URL = SERVER_URL.rstrip("/") + "/status"
+
 # ---------------------------------------------------------------------------
 # Display constants
 # ---------------------------------------------------------------------------
@@ -107,6 +109,8 @@ esp32_ready = DigitalInOut(board.ESP_BUSY)
 esp32_reset = DigitalInOut(board.ESP_RESET)
 spi = busio.SPI(board.SCK, board.MOSI, board.MISO)
 esp = adafruit_esp32spi.ESP_SPIcontrol(spi, esp32_cs, esp32_ready, esp32_reset)
+esp.reset()
+time.sleep(1)
 
 display = framebufferio.FramebufferDisplay(matrix, auto_refresh=True)
 
@@ -244,35 +248,43 @@ def connect_wifi():
     return False
 
 
-pool = None
-requests = None
+session = None
 
 
 def init_http():
-    """Initialize HTTP session using ESP32 co-processor radio."""
-    global pool, requests
+    """Create a fresh adafruit_requests Session."""
+    global session
     pool = adafruit_connection_manager.get_radio_socketpool(esp)
-    ssl_context = adafruit_connection_manager.get_radio_ssl_context(esp)
-    requests = adafruit_requests.Session(pool, ssl_context)
+    ssl_ctx = adafruit_connection_manager.get_radio_ssl_context(esp)
+    session = adafruit_requests.Session(pool, ssl_ctx)
+
+
+_consecutive_failures = 0
 
 
 def fetch_status():
-    """Fetch /status from the host server. Returns parsed dict or None."""
-    if requests is None:
+    """Fetch /status from the host server. Rebuilds the HTTP session on repeated failures."""
+    global _consecutive_failures
+    if session is None:
         return None
-    url = f"{SERVER_URL}/status"
+
     headers = {"Connection": "close"}
     if SECRET:
         headers["Authorization"] = f"Bearer {SECRET}"
     try:
-        resp = requests.get(url, headers=headers, timeout=8)
+        resp = session.get(STATUS_URL, headers=headers, timeout=10)
         data = resp.json()
         resp.close()
+        _consecutive_failures = 0
         return data
     except Exception as e:
-        print(f"Fetch error: {e}")
-        # Reinitialize HTTP session to recover from socket errors
-        init_http()
+        _consecutive_failures += 1
+        print(f"Fetch error ({_consecutive_failures}): {e}")
+        if _consecutive_failures >= 2:
+            # Socket is likely stuck — rebuild the entire session
+            print("Rebuilding HTTP session...")
+            _consecutive_failures = 0
+            init_http()
         return None
 
 
@@ -452,8 +464,8 @@ def main():
         while not connect_wifi():
             time.sleep(10)
 
+    time.sleep(3)  # let ESP32 settle after WiFi connect
     init_http()
-    # WiFi connected
 
     # Timers (monotonic)
     last_poll = 0
