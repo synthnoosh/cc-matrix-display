@@ -38,6 +38,8 @@ log = logging.getLogger("cc-matrix")
 DEFAULT_CONFIG_PATH = Path.home() / ".cc-matrix" / "config.json"
 SESSIONS_DIR = Path.home() / ".claude" / "sessions"
 WAITING_PREFIX = "/tmp/claude-waiting-"
+PENDING_PREFIX = "/tmp/claude-pending-"
+PENDING_THRESHOLD = 10  # seconds before pending becomes "blocked"
 USAGE_API = "https://api.anthropic.com/oauth/usage"
 USAGE_CACHE_TTL = 60  # seconds
 
@@ -207,12 +209,24 @@ def get_named_sessions():
 
         session_id = data.get("sessionId", "")
         waiting_flag = Path(f"{WAITING_PREFIX}{session_id}")
-        status = "waiting" if waiting_flag.exists() else "working"
+        pending_flag = Path(f"{PENDING_PREFIX}{session_id}")
+
+        if waiting_flag.exists():
+            status = "waiting"
+        elif pending_flag.exists():
+            try:
+                age = time.time() - pending_flag.stat().st_mtime
+                status = "blocked" if age > PENDING_THRESHOLD else "working"
+            except OSError:
+                status = "working"
+        else:
+            status = "working"
 
         sessions.append({"name": name, "status": status})
 
-    # Sort: waiting first, then alphabetical
-    sessions.sort(key=lambda s: (0 if s["status"] == "waiting" else 1, s["name"]))
+    # Sort: blocked first, then waiting, then working
+    priority = {"blocked": 0, "waiting": 1, "working": 2}
+    sessions.sort(key=lambda s: (priority.get(s["status"], 2), s["name"]))
     return sessions
 
 

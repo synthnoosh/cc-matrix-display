@@ -48,14 +48,14 @@ WIFI_PASSWORD = os.getenv("WIFI_PASSWORD", "")
 WIDTH = 64
 HEIGHT = 32
 BAR_X = 14  # x offset for usage bars (after "5h " / "7d " label)
-BAR_WIDTH = 34  # pixels wide for the bar
+BAR_WIDTH = 30  # pixels wide for the bar
 BAR_HEIGHT = 4  # pixels tall
-PCT_X = 50  # x offset for percentage text
-SEPARATOR_Y = 12
-SESSION_SLOTS = 3
-SESSION_START_Y = 14  # first session row y
-SESSION_ROW_HEIGHT = 6  # per row
-SCROLL_SPEED = 0.06  # seconds between scroll steps
+PCT_X = 46  # x offset for percentage text
+SEPARATOR_Y = 13
+SESSION_SLOTS = 2
+SESSION_START_Y = 15  # first session row y
+SESSION_ROW_HEIGHT = 9  # per row
+SCROLL_SPEED = 0.3  # seconds between character scroll steps
 PULSE_SPEED = 0.5  # seconds between pulse toggles
 CYCLE_SPEED = 4.0  # seconds between session group rotation
 FLASH_DURATION = 1.5  # seconds for full-screen alert
@@ -67,6 +67,8 @@ COLOR_ORANGE = 0xFF6600
 COLOR_RED = 0xFF0000
 COLOR_AMBER = 0xFFAA00
 COLOR_AMBER_DIM = 0x664400
+COLOR_RED_BRIGHT = 0xFF0000
+COLOR_RED_DIM = 0x660000
 COLOR_WHITE = 0xFFFFFF
 COLOR_WHITE_DIM = 0x666666
 COLOR_GRAY = 0x333333
@@ -108,11 +110,15 @@ esp = adafruit_esp32spi.ESP_SPIcontrol(spi, esp32_cs, esp32_ready, esp32_reset)
 
 display = framebufferio.FramebufferDisplay(matrix, auto_refresh=True)
 
-# Load font
+# Load fonts — small for usage bars, larger for session names
 try:
-    font = bitmap_font.load_font("/fonts/tom-thumb.bdf")
+    font_small = bitmap_font.load_font("/fonts/tom-thumb.bdf")
 except OSError:
-    font = terminalio.FONT  # fallback
+    font_small = terminalio.FONT
+try:
+    font = bitmap_font.load_font("/fonts/5x8.bdf")
+except OSError:
+    font = terminalio.FONT
 
 # ---------------------------------------------------------------------------
 # Display groups
@@ -152,18 +158,18 @@ def create_bar_bitmap(pct, y_offset):
 # --- Usage section ---
 usage_group = displayio.Group()
 
-label_5h = label.Label(font, text="5h", color=COLOR_WHITE_DIM, x=1, y=3)
-label_7d = label.Label(font, text="7d", color=COLOR_WHITE_DIM, x=1, y=9)
+label_5h = label.Label(font_small, text="5h", color=COLOR_WHITE_DIM, x=1, y=3)
+label_7d = label.Label(font_small, text="7d", color=COLOR_WHITE_DIM, x=1, y=10)
 usage_group.append(label_5h)
 usage_group.append(label_7d)
 
 bar_5h_grid, bar_5h_bmp, bar_5h_pal = create_bar_bitmap(0, 1)
-bar_7d_grid, bar_7d_bmp, bar_7d_pal = create_bar_bitmap(0, 7)
+bar_7d_grid, bar_7d_bmp, bar_7d_pal = create_bar_bitmap(0, 8)
 usage_group.append(bar_5h_grid)
 usage_group.append(bar_7d_grid)
 
-pct_5h_label = label.Label(font, text="  0%", color=COLOR_WHITE_DIM, x=PCT_X, y=3)
-pct_7d_label = label.Label(font, text="  0%", color=COLOR_WHITE_DIM, x=PCT_X, y=9)
+pct_5h_label = label.Label(font_small, text="  0%", color=COLOR_WHITE_DIM, x=PCT_X, y=3)
+pct_7d_label = label.Label(font_small, text="  0%", color=COLOR_WHITE_DIM, x=PCT_X, y=10)
 usage_group.append(pct_5h_label)
 usage_group.append(pct_7d_label)
 
@@ -178,8 +184,7 @@ for x in range(WIDTH):
 sep_grid = displayio.TileGrid(sep_bmp, pixel_shader=sep_palette, x=0, y=SEPARATOR_Y)
 root.append(sep_grid)
 
-sep_label = label.Label(font, text="", color=COLOR_GRAY, x=2, y=SEPARATOR_Y)
-root.append(sep_label)
+sep_label = None  # removed — was causing visual noise on separator line
 
 # --- Session slots ---
 session_group = displayio.Group()
@@ -256,7 +261,7 @@ def fetch_status():
     if requests is None:
         return None
     url = f"{SERVER_URL}/status"
-    headers = {}
+    headers = {"Connection": "close"}
     if SECRET:
         headers["Authorization"] = f"Bearer {SECRET}"
     try:
@@ -266,6 +271,8 @@ def fetch_status():
         return data
     except Exception as e:
         print(f"Fetch error: {e}")
+        # Reinitialize HTTP session to recover from socket errors
+        init_http()
         return None
 
 
@@ -287,7 +294,9 @@ def update_bar(bmp, palette, pct):
 def format_pct(pct):
     """Format percentage for display, right-aligned in 4 chars."""
     s = f"{pct}%"
-    return s.rjust(4)
+    while len(s) < 4:
+        s = " " + s
+    return s
 
 
 # State
@@ -298,13 +307,13 @@ scroll_positions = [0] * SESSION_SLOTS  # x offset for each label
 
 
 def get_visible_sessions():
-    """Apply priority pinning: waiting first, then working in cycle slots."""
-    waiting = [s for s in current_sessions if s["status"] == "waiting"]
+    """Apply priority pinning: blocked/waiting first, then working in cycle slots."""
+    attention = [s for s in current_sessions if s["status"] in ("blocked", "waiting")]
     working = [s for s in current_sessions if s["status"] == "working"]
 
     visible = []
-    # Pin waiting sessions to top slots
-    for i, s in enumerate(waiting[:SESSION_SLOTS]):
+    # Pin attention-needing sessions to top slots
+    for i, s in enumerate(attention[:SESSION_SLOTS]):
         visible.append(s)
 
     # Fill remaining slots with cycling working sessions
@@ -314,13 +323,13 @@ def get_visible_sessions():
         for i in range(remaining_slots):
             idx = (start + i) % len(working)
             visible.append(working[idx])
-    elif remaining_slots <= 0 and len(waiting) > SESSION_SLOTS:
-        # More waiting than slots: cycle among waiting
-        start = display_offset % len(waiting)
+    elif remaining_slots <= 0 and len(attention) > SESSION_SLOTS:
+        # More attention-needing than slots: cycle among them
+        start = display_offset % len(attention)
         visible = []
         for i in range(SESSION_SLOTS):
-            idx = (start + i) % len(waiting)
-            visible.append(waiting[idx])
+            idx = (start + i) % len(attention)
+            visible.append(attention[idx])
 
     return visible
 
@@ -348,24 +357,14 @@ def update_display(data):
     sessions = data.get("sessions", [])
     current_sessions = sessions
 
-    # Detect new waiting transitions
-    new_waiting = set()
+    # Detect new attention transitions (waiting or blocked)
+    new_attention = set()
     for s in sessions:
-        if s["status"] == "waiting":
-            new_waiting.add(s["name"])
+        if s["status"] in ("waiting", "blocked"):
+            new_attention.add(s["name"])
 
-    new_transitions = new_waiting - prev_session_names_waiting
-    prev_session_names_waiting = new_waiting
-
-    # Update separator
-    total = len(sessions)
-    waiting_count = len(new_waiting)
-    if total > SESSION_SLOTS:
-        sep_label.text = f"{waiting_count}/{total} wait"
-    elif total > 0:
-        sep_label.text = ""
-    else:
-        sep_label.text = ""
+    new_transitions = new_attention - prev_session_names_waiting
+    prev_session_names_waiting = new_attention
 
     # Update visible session slots
     visible = get_visible_sessions()
@@ -373,16 +372,21 @@ def update_display(data):
         if i < len(visible):
             s = visible[i]
             name = s["name"]
-            is_waiting = s["status"] == "waiting"
+            status = s["status"]
 
             session_labels[i].text = name
-            session_labels[i].color = COLOR_WHITE if is_waiting else COLOR_WHITE_DIM
+            if status == "blocked":
+                session_labels[i].color = COLOR_WHITE
+                session_dots[i].color = COLOR_RED_BRIGHT
+            elif status == "waiting":
+                session_labels[i].color = COLOR_WHITE
+                session_dots[i].color = COLOR_AMBER
+            else:
+                session_labels[i].color = COLOR_WHITE_DIM
+                session_dots[i].color = COLOR_GREEN
 
             session_dots[i].text = "*"
-            session_dots[i].color = COLOR_AMBER if is_waiting else COLOR_GREEN
 
-            # Reset scroll for new content
-            session_labels[i].x = 7
             scroll_positions[i] = 0
         else:
             session_labels[i].text = ""
@@ -438,7 +442,7 @@ def main():
     global display_offset
 
     # Startup display
-    sep_label.text = "connecting..."
+    # startup display
     pct_5h_label.text = "  -"
     pct_7d_label.text = "  -"
 
@@ -449,7 +453,7 @@ def main():
             time.sleep(10)
 
     init_http()
-    sep_label.text = ""
+    # WiFi connected
 
     # Timers (monotonic)
     last_poll = 0
@@ -488,20 +492,19 @@ def main():
                     if esp.is_connected:
                         init_http()
 
-        # --- Scroll long names ---
+        # --- Scroll long names (text-window, never spills past left border) ---
         if not is_flashing and now - last_scroll > SCROLL_SPEED:
             last_scroll = now
             visible = get_visible_sessions()
+            max_chars = (WIDTH - 7) // 5  # visible chars at 5px/char
             for i in range(min(len(visible), SESSION_SLOTS)):
                 name = visible[i]["name"]
-                text_width = len(name) * 4  # approximate with tom-thumb
-                max_visible = WIDTH - 7  # pixels available for name
-                if text_width > max_visible:
-                    scroll_positions[i] += 1
-                    total_scroll = text_width + 16  # 16px gap before wrap
-                    if scroll_positions[i] > total_scroll:
-                        scroll_positions[i] = 0
-                    session_labels[i].x = 7 - scroll_positions[i]
+                if len(name) > max_chars:
+                    padded = name + "    " + name
+                    scroll_positions[i] = (scroll_positions[i] + 1) % (len(name) + 4)
+                    session_labels[i].text = padded[scroll_positions[i]:scroll_positions[i] + max_chars]
+                else:
+                    session_labels[i].text = name
 
         # --- Pulse waiting dots ---
         if not is_flashing and now - last_pulse > PULSE_SPEED:
@@ -509,31 +512,34 @@ def main():
             pulse_on = not pulse_on
             visible = get_visible_sessions()
             for i in range(min(len(visible), SESSION_SLOTS)):
-                if visible[i]["status"] == "waiting":
+                st = visible[i]["status"]
+                if st == "blocked":
+                    session_dots[i].color = COLOR_RED_BRIGHT if pulse_on else COLOR_RED_DIM
+                elif st == "waiting":
                     session_dots[i].color = COLOR_AMBER if pulse_on else COLOR_AMBER_DIM
 
         # --- Cycle working sessions ---
         if not is_flashing and now - last_cycle > CYCLE_SPEED:
             last_cycle = now
-            waiting = [s for s in current_sessions if s["status"] == "waiting"]
+            attention = [s for s in current_sessions if s["status"] in ("blocked", "waiting")]
             working = [s for s in current_sessions if s["status"] == "working"]
-            remaining_slots = max(0, SESSION_SLOTS - len(waiting))
+            remaining_slots = max(0, SESSION_SLOTS - len(attention))
             if len(working) > remaining_slots:
                 display_offset += 1
-                # Re-render visible sessions
                 visible = get_visible_sessions()
                 for i in range(SESSION_SLOTS):
                     if i < len(visible):
                         s = visible[i]
                         session_labels[i].text = s["name"]
-                        session_labels[i].color = (
-                            COLOR_WHITE if s["status"] == "waiting" else COLOR_WHITE_DIM
-                        )
+                        st = s["status"]
+                        session_labels[i].color = COLOR_WHITE if st != "working" else COLOR_WHITE_DIM
                         session_dots[i].text = "*"
-                        session_dots[i].color = (
-                            COLOR_AMBER if s["status"] == "waiting" else COLOR_GREEN
-                        )
-                        session_labels[i].x = 7
+                        if st == "blocked":
+                            session_dots[i].color = COLOR_RED_BRIGHT
+                        elif st == "waiting":
+                            session_dots[i].color = COLOR_AMBER
+                        else:
+                            session_dots[i].color = COLOR_GREEN
                         scroll_positions[i] = 0
 
         # Small sleep to prevent tight-looping
