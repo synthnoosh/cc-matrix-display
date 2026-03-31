@@ -1,4 +1,4 @@
-"""cc-matrix-display — CircuitPython code for Matrix Portal S3 + 64x32 RGB LED panel.
+"""cc-matrix-display — CircuitPython code for Matrix Portal M4 + 64x32 RGB LED panel.
 
 Polls a local HTTP server for Claude Code session data and usage stats,
 then renders them on the LED matrix with color-coded bars, scrolling text,
@@ -18,16 +18,17 @@ Priority pinning: waiting sessions always pinned to top slots.
 import os
 import time
 import board
+import busio
 import displayio
 import framebufferio
 import rgbmatrix
 import terminalio
-import wifi
-import socketpool
-import ssl
+from digitalio import DigitalInOut
 
 from adafruit_bitmap_font import bitmap_font
 from adafruit_display_text import label
+from adafruit_esp32spi import adafruit_esp32spi
+import adafruit_connection_manager
 import adafruit_requests
 
 # ---------------------------------------------------------------------------
@@ -94,6 +95,16 @@ matrix = rgbmatrix.RGBMatrix(
     latch_pin=board.MTX_LAT,
     output_enable_pin=board.MTX_OE,
 )
+
+# ---------------------------------------------------------------------------
+# Initialize ESP32 WiFi co-processor (Matrix Portal M4)
+# ---------------------------------------------------------------------------
+
+esp32_cs = DigitalInOut(board.ESP_CS)
+esp32_ready = DigitalInOut(board.ESP_BUSY)
+esp32_reset = DigitalInOut(board.ESP_RESET)
+spi = busio.SPI(board.SCK, board.MOSI, board.MISO)
+esp = adafruit_esp32spi.ESP_SPIcontrol(spi, esp32_cs, esp32_ready, esp32_reset)
 
 display = framebufferio.FramebufferDisplay(matrix, auto_refresh=True)
 
@@ -210,8 +221,8 @@ root.append(flash_group)
 
 
 def connect_wifi():
-    """Connect to WiFi, retry on failure."""
-    if wifi.radio.connected:
+    """Connect to WiFi via ESP32 co-processor, retry on failure."""
+    if esp.is_connected:
         return True
     if not WIFI_SSID:
         print("No WIFI_SSID configured")
@@ -219,10 +230,10 @@ def connect_wifi():
     for attempt in range(3):
         try:
             print(f"WiFi connecting to {WIFI_SSID} (attempt {attempt + 1})...")
-            wifi.radio.connect(WIFI_SSID, WIFI_PASSWORD)
-            print(f"WiFi connected: {wifi.radio.ipv4_address}")
+            esp.connect_AP(WIFI_SSID, WIFI_PASSWORD)
+            print(f"WiFi connected: {esp.pretty_ip(esp.ip_address)}")
             return True
-        except ConnectionError as e:
+        except (ConnectionError, RuntimeError) as e:
             print(f"WiFi failed: {e}")
             time.sleep(2)
     return False
@@ -233,10 +244,10 @@ requests = None
 
 
 def init_http():
-    """Initialize HTTP session (call after WiFi connected)."""
+    """Initialize HTTP session using ESP32 co-processor radio."""
     global pool, requests
-    pool = socketpool.SocketPool(wifi.radio)
-    ssl_context = ssl.create_default_context()
+    pool = adafruit_connection_manager.get_radio_socketpool(esp)
+    ssl_context = adafruit_connection_manager.get_radio_ssl_context(esp)
     requests = adafruit_requests.Session(pool, ssl_context)
 
 
@@ -471,10 +482,10 @@ def main():
                     show_no_sessions()
             else:
                 # Check WiFi
-                if not wifi.radio.connected:
+                if not esp.is_connected:
                     show_offline()
                     connect_wifi()
-                    if wifi.radio.connected:
+                    if esp.is_connected:
                         init_http()
 
         # --- Scroll long names ---
