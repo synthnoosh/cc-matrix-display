@@ -1,6 +1,6 @@
 # cc-matrix-display
 
-A physical desk dashboard for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) powered by an Adafruit Matrix Portal S3 and a 64x32 RGB LED matrix.
+A physical desk dashboard for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) powered by an Adafruit Matrix Portal M4 and a 64x32 RGB LED matrix.
 
 **What it does:**
 - Shows your Claude Code **usage limits** (5-hour and 7-day rolling windows) as color-coded progress bars
@@ -11,7 +11,7 @@ A physical desk dashboard for [Claude Code](https://docs.anthropic.com/en/docs/c
 
 | Component | Link |
 |-|-|
-| Adafruit Matrix Portal S3 | [adafruit.com/product/5778](https://www.adafruit.com/product/5778) |
+| Adafruit Matrix Portal M4 | [adafruit.com/product/4745](https://www.adafruit.com/product/4745) |
 | 64x32 RGB LED Matrix Panel (4mm pitch) | [adafruit.com/product/2278](https://www.adafruit.com/product/2278) |
 | USB-C cable | For power and initial programming |
 
@@ -38,7 +38,7 @@ Only **named** Claude Code sessions appear (started with `--name` or renamed wit
 
 ### 1. Flash CircuitPython
 
-Download the latest CircuitPython 9.x UF2 for [Matrix Portal S3](https://circuitpython.org/board/adafruit_matrixportal_s3/) and flash it.
+Download the latest CircuitPython 9.x UF2 for [Matrix Portal M4](https://circuitpython.org/board/matrixportal_m4/) and flash it.
 
 ### 2. Install CircuitPython Libraries
 
@@ -130,6 +130,14 @@ The server binds to `0.0.0.0` so the Matrix Portal can reach it over WiFi. Mitig
 - **Shared secret**: All requests require `Authorization: Bearer {secret}`
 - **Minimal exposure**: API returns only session names and usage percentages — no file paths, PIDs, or session IDs
 - **Firewall**: On macOS, enable the application firewall and allow only the server process
+
+## Uninstalling
+
+```bash
+./host/uninstall.sh
+```
+
+This removes the background service, Claude Code hooks, config directory (`~/.cc-matrix`), and flag files. Your Matrix Portal code on the CIRCUITPY drive is not affected — delete `code.py` from the drive or reflash CircuitPython to reset it.
 
 ## License
 

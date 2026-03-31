@@ -43,11 +43,12 @@ PENDING_THRESHOLD = 10  # seconds before pending becomes "blocked"
 PENDING_EXPIRY = 60  # seconds before stale pending is treated as "waiting"
 USAGE_API = "https://api.anthropic.com/oauth/usage"
 USAGE_CACHE_TTL = 60  # seconds
+ANTHROPIC_BETA = "oauth-2025-04-20"  # overridden by config at startup
 
 
 def load_config(path=None):
     p = Path(path) if path else DEFAULT_CONFIG_PATH
-    cfg = {"port": 8321, "secret": "", "bind": "0.0.0.0"}
+    cfg = {"port": 8321, "secret": "", "bind": "0.0.0.0", "anthropic_beta": "oauth-2025-04-20"}
     if p.exists():
         with open(p) as f:
             cfg.update(json.load(f))
@@ -55,6 +56,7 @@ def load_config(path=None):
     cfg["port"] = int(os.environ.get("CC_MATRIX_PORT", cfg["port"]))
     cfg["secret"] = os.environ.get("CC_MATRIX_SECRET", cfg["secret"])
     cfg["bind"] = os.environ.get("CC_MATRIX_BIND", cfg["bind"])
+    cfg["anthropic_beta"] = os.environ.get("CC_MATRIX_ANTHROPIC_BETA", cfg["anthropic_beta"])
     return cfg
 
 
@@ -104,13 +106,13 @@ def _try_macos_keychain():
             stderr=subprocess.DEVNULL,
             timeout=5,
         ).decode()
-        m = re.search(r"sk-ant-oat01-[A-Za-z0-9_-]+", raw)
+        m = re.search(r"sk-ant-[A-Za-z0-9_-]+", raw)
         if m:
             return m.group(0)
         # Try hex-decoded
         try:
             decoded = bytes.fromhex(raw.strip()).decode("utf-8", errors="ignore")
-            m = re.search(r"sk-ant-oat01-[A-Za-z0-9_-]+", decoded)
+            m = re.search(r"sk-ant-[A-Za-z0-9_-]+", decoded)
             if m:
                 return m.group(0)
         except ValueError:
@@ -149,7 +151,7 @@ def fetch_usage():
             headers={
                 "Accept": "application/json",
                 "Authorization": f"Bearer {token}",
-                "anthropic-beta": "oauth-2025-04-20",
+                "anthropic-beta": ANTHROPIC_BETA,
                 "User-Agent": "cc-matrix-display/1.0",
             },
         )
@@ -191,6 +193,7 @@ def get_named_sessions():
             with open(path) as f:
                 data = json.load(f)
         except (json.JSONDecodeError, OSError):
+            log.debug("Skipping unreadable session file: %s", path)
             continue
 
         # Only include named sessions
@@ -259,7 +262,6 @@ class MatrixHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(body)
 
@@ -289,12 +291,6 @@ class MatrixHandler(BaseHTTPRequestHandler):
         }
         self._json_response(200, payload)
 
-    def do_OPTIONS(self):
-        self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Headers", "Authorization")
-        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
-        self.end_headers()
 
 
 # ---------------------------------------------------------------------------
@@ -303,8 +299,10 @@ class MatrixHandler(BaseHTTPRequestHandler):
 
 
 def main():
+    global ANTHROPIC_BETA
     config_path = sys.argv[1] if len(sys.argv) > 1 else None
     config = load_config(config_path)
+    ANTHROPIC_BETA = config["anthropic_beta"]
 
     HTTPServer.allow_reuse_address = True
     server = HTTPServer((config["bind"], config["port"]), MatrixHandler)

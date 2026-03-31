@@ -30,7 +30,13 @@ error() { echo -e "${RED}[x]${NC} $1"; exit 1; }
 info "Checking prerequisites..."
 
 command -v python3 >/dev/null 2>&1 || error "python3 not found"
-command -v jq >/dev/null 2>&1 || error "jq not found (install: brew install jq)"
+if ! command -v jq >/dev/null 2>&1; then
+    if [ "$(uname)" = "Darwin" ]; then
+        error "jq not found (install: brew install jq)"
+    else
+        error "jq not found (install: sudo apt install jq  or  sudo dnf install jq)"
+    fi
+fi
 
 if [ ! -d "$CLAUDE_DIR" ]; then
     error "Claude Code not found (~/.claude missing). Install Claude Code first."
@@ -71,7 +77,8 @@ mkdir -p "$HOOKS_DIR"
 
 cp "$REPO_DIR/hooks/matrix-stop.sh" "$HOOKS_DIR/matrix-stop.sh"
 cp "$REPO_DIR/hooks/matrix-resume.sh" "$HOOKS_DIR/matrix-resume.sh"
-chmod +x "$HOOKS_DIR/matrix-stop.sh" "$HOOKS_DIR/matrix-resume.sh"
+cp "$REPO_DIR/hooks/matrix-complete.sh" "$HOOKS_DIR/matrix-complete.sh"
+chmod +x "$HOOKS_DIR/matrix-stop.sh" "$HOOKS_DIR/matrix-resume.sh" "$HOOKS_DIR/matrix-complete.sh"
 
 info "Installed hook scripts to $HOOKS_DIR"
 
@@ -89,6 +96,7 @@ info "Backed up settings.json"
 
 STOP_HOOK_CMD="bash $HOOKS_DIR/matrix-stop.sh"
 RESUME_HOOK_CMD="bash $HOOKS_DIR/matrix-resume.sh"
+COMPLETE_HOOK_CMD="bash $HOOKS_DIR/matrix-complete.sh"
 
 # Check if hooks already installed
 if jq -e '.hooks.Stop[]?.hooks[]? | select(.command == "'"$STOP_HOOK_CMD"'")' "$SETTINGS" >/dev/null 2>&1; then
@@ -103,6 +111,13 @@ if jq -e '.hooks.PreToolUse[]?.hooks[]? | select(.command == "'"$RESUME_HOOK_CMD
 else
     jq '.hooks.PreToolUse += [{"matcher": "", "hooks": [{"type": "command", "command": "'"$RESUME_HOOK_CMD"'"}]}]' "$SETTINGS" > "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
     info "Added PreToolUse hook for matrix-resume.sh"
+fi
+
+if jq -e '.hooks.PostToolUse[]?.hooks[]? | select(.command == "'"$COMPLETE_HOOK_CMD"'")' "$SETTINGS" >/dev/null 2>&1; then
+    warn "PostToolUse hook already installed — skipping"
+else
+    jq '.hooks.PostToolUse += [{"matcher": "", "hooks": [{"type": "command", "command": "'"$COMPLETE_HOOK_CMD"'"}]}]' "$SETTINGS" > "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
+    info "Added PostToolUse hook for matrix-complete.sh"
 fi
 
 # ---------------------------------------------------------------------------
@@ -124,7 +139,7 @@ if [ "$(uname)" = "Darwin" ]; then
     <string>$PLIST_NAME</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/bin/python3</string>
+        <string>$(command -v python3)</string>
         <string>$SERVER_PATH</string>
         <string>$CONFIG_PATH</string>
     </array>
@@ -221,8 +236,18 @@ echo "  Secret:  $SECRET"
 echo "  Config:  $CONFIG_DIR/config.json"
 echo "  Logs:    $LOG_DIR/cc-matrix-display.log"
 echo ""
+LOCAL_IP=""
+if [ "$(uname)" = "Darwin" ]; then
+    LOCAL_IP=$(ipconfig getifaddr en0 2>/dev/null || true)
+else
+    LOCAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || true)
+fi
+
 echo "  For the Matrix Portal settings.toml, use:"
 echo "    CC_MATRIX_URL = \"http://$(hostname).local:$PORT\""
+if [ -n "$LOCAL_IP" ]; then
+    echo "    # or by IP: CC_MATRIX_URL = \"http://$LOCAL_IP:$PORT\""
+fi
 echo "    CC_MATRIX_SECRET = \"$SECRET\""
 echo ""
 echo "  To test: curl -s -H 'Authorization: Bearer $SECRET' http://localhost:$PORT/status | python3 -m json.tool"

@@ -35,7 +35,9 @@ import adafruit_requests
 # Configuration from settings.toml
 # ---------------------------------------------------------------------------
 
-SERVER_URL = os.getenv("CC_MATRIX_URL", "http://192.168.1.100:8321")
+SERVER_URL = os.getenv("CC_MATRIX_URL", "")
+if not SERVER_URL:
+    raise RuntimeError("CC_MATRIX_URL not set in settings.toml — see settings.toml.example")
 SECRET = os.getenv("CC_MATRIX_SECRET", "")
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL_S", "5"))
 WIFI_SSID = os.getenv("WIFI_SSID", "")
@@ -100,8 +102,16 @@ matrix = rgbmatrix.RGBMatrix(
     output_enable_pin=board.MTX_OE,
 )
 
+display = framebufferio.FramebufferDisplay(matrix, auto_refresh=True)
+
+# Show boot splash before WiFi init (which can take several seconds)
+boot_group = displayio.Group()
+boot_label = label.Label(terminalio.FONT, text="booting...", color=0x666666, x=8, y=16)
+boot_group.append(boot_label)
+display.root_group = boot_group
+
 # ---------------------------------------------------------------------------
-# Initialize ESP32 WiFi co-processor (Matrix Portal M4)
+# Initialize ESP32 WiFi co-processor (Matrix Portal M4 — SAMD51 + ESP32 over SPI)
 # ---------------------------------------------------------------------------
 
 esp32_cs = DigitalInOut(board.ESP_CS)
@@ -111,8 +121,6 @@ spi = busio.SPI(board.SCK, board.MOSI, board.MISO)
 esp = adafruit_esp32spi.ESP_SPIcontrol(spi, esp32_cs, esp32_ready, esp32_reset)
 esp.reset()
 time.sleep(1)
-
-display = framebufferio.FramebufferDisplay(matrix, auto_refresh=True)
 
 # Load fonts — small for usage bars, larger for session names
 try:
