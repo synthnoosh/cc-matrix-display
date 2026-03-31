@@ -458,7 +458,7 @@ def show_no_sessions():
 
 
 def main():
-    global display_offset
+    global display_offset, current_sessions
 
     # WiFi (boot_group still showing during connect)
     if not connect_wifi():
@@ -507,6 +507,9 @@ def main():
                 poll_failures += 1
                 # Only show offline after sustained failures
                 if poll_failures >= 5:
+                    # Clear stale session data so scroll/pulse timers
+                    # don't overwrite the offline display
+                    current_sessions = []
                     if not esp.is_connected:
                         show_offline()
                         connect_wifi()
