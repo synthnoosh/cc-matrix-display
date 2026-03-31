@@ -46,11 +46,15 @@ if [ -f "$SETTINGS" ] && command -v jq >/dev/null 2>&1; then
     cp "$SETTINGS" "$SETTINGS.bak.$(date +%s)"
     info "Backed up settings.json"
 
-    # Remove hook entries that reference our scripts
-    jq '
-      if .hooks.Stop then .hooks.Stop |= map(select(.hooks | all(.command | contains("matrix-stop.sh") | not))) else . end |
-      if .hooks.PreToolUse then .hooks.PreToolUse |= map(select(.hooks | all(.command | contains("matrix-resume.sh") | not))) else . end |
-      if .hooks.PostToolUse then .hooks.PostToolUse |= map(select(.hooks | all(.command | contains("matrix-complete.sh") | not))) else . end
+    STOP_HOOK_CMD="bash $HOOKS_DIR/matrix-stop.sh"
+    RESUME_HOOK_CMD="bash $HOOKS_DIR/matrix-resume.sh"
+    COMPLETE_HOOK_CMD="bash $HOOKS_DIR/matrix-complete.sh"
+
+    # Remove hook entries matching our exact commands
+    jq --arg stop "$STOP_HOOK_CMD" --arg resume "$RESUME_HOOK_CMD" --arg complete "$COMPLETE_HOOK_CMD" '
+      if .hooks.Stop then .hooks.Stop |= map(select(.hooks | all(.command != $stop))) else . end |
+      if .hooks.PreToolUse then .hooks.PreToolUse |= map(select(.hooks | all(.command != $resume))) else . end |
+      if .hooks.PostToolUse then .hooks.PostToolUse |= map(select(.hooks | all(.command != $complete))) else . end
     ' "$SETTINGS" > "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
     info "Removed hooks from settings.json"
 else
@@ -69,8 +73,9 @@ info "Removed hook scripts"
 # ---------------------------------------------------------------------------
 
 if [ -d "$CONFIG_DIR" ]; then
+    warn "Removing config directory ($CONFIG_DIR) — this deletes your shared secret"
     rm -rf "$CONFIG_DIR"
-    info "Removed config directory ($CONFIG_DIR)"
+    info "Removed config directory"
 fi
 
 # ---------------------------------------------------------------------------

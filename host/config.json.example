@@ -1,5 +1,6 @@
 {
   "port": 8321,
   "secret": "CHANGE_ME_generate_a_random_string",
-  "bind": "0.0.0.0"
+  "bind": "0.0.0.0",
+  "anthropic_beta": "oauth-2025-04-20"
 }

@@ -137,7 +137,6 @@ except OSError:
 # ---------------------------------------------------------------------------
 
 root = displayio.Group()
-display.root_group = root
 
 
 def bar_color(pct):
@@ -461,12 +460,7 @@ def show_no_sessions():
 def main():
     global display_offset
 
-    # Startup display
-    # startup display
-    pct_5h_label.text = "  -"
-    pct_7d_label.text = "  -"
-
-    # WiFi
+    # WiFi (boot_group still showing during connect)
     if not connect_wifi():
         show_offline()
         while not connect_wifi():
@@ -474,6 +468,9 @@ def main():
 
     time.sleep(3)  # let ESP32 settle after WiFi connect
     init_http()
+
+    # Switch from boot splash to real UI
+    display.root_group = root
 
     # Timers (monotonic)
     last_poll = 0

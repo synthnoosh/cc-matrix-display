@@ -10,7 +10,6 @@ Usage:
     CC_MATRIX_PORT=8321 python3 server.py
 """
 
-import glob
 import json
 import logging
 import os
@@ -290,8 +289,6 @@ class MatrixHandler(BaseHTTPRequestHandler):
             "ts": int(time.time()),
         }
         self._json_response(200, payload)
-
-
 
 # ---------------------------------------------------------------------------
 # Main

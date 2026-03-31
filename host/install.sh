@@ -184,7 +184,6 @@ Type=simple
 ExecStart=$(command -v python3) $SERVER_PATH $CONFIG_PATH
 Restart=on-failure
 RestartSec=5
-Environment=CC_MATRIX_SECRET=$SECRET
 
 [Install]
 WantedBy=default.target
@@ -238,7 +237,7 @@ echo "  Logs:    $LOG_DIR/cc-matrix-display.log"
 echo ""
 LOCAL_IP=""
 if [ "$(uname)" = "Darwin" ]; then
-    LOCAL_IP=$(ipconfig getifaddr en0 2>/dev/null || true)
+    LOCAL_IP=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || true)
 else
     LOCAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || true)
 fi
