@@ -40,7 +40,7 @@ SESSIONS_DIR = Path.home() / ".claude" / "sessions"
 WAITING_PREFIX = "/tmp/claude-waiting-"
 PENDING_PREFIX = "/tmp/claude-pending-"
 PENDING_THRESHOLD = 10  # seconds before pending becomes "blocked"
-PENDING_EXPIRY = 300  # seconds before stale pending is treated as "waiting"
+PENDING_EXPIRY = 60  # seconds before stale pending is treated as "waiting"
 USAGE_API = "https://api.anthropic.com/oauth/usage"
 USAGE_CACHE_TTL = 60  # seconds
 
