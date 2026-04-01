@@ -18,19 +18,27 @@ A physical desk dashboard for [Claude Code](https://docs.anthropic.com/en/docs/c
 ## How It Works
 
 ```
-┌─────────────────────┐   HTTP/JSON   ┌──────────────────┐
-│  Your Mac/Linux     │ ◄──────────── │  Matrix Portal   │
-│                     │   :8321       │  (ESP32-S3)      │
-│  server.py          │ ────────────► │                  │
-│  - session data     │               │  code.py         │
-│  - usage API        │               │  - renders bars  │
-│  - auth: Bearer     │               │  - shows sessions│
-│                     │               │  - pulses alerts │
-│  Hook scripts:      │               │                  │
-│  - Stop: waiting    │               │  64x32 LED panel │
-│  - PreToolUse: clear│               └──────────────────┘
-└─────────────────────┘
+┌──────────────────────┐   HTTP/JSON   ┌──────────────────┐
+│  Your Mac/Linux      │ ◄──────────── │  Matrix Portal   │
+│                      │   :8321       │  M4 (SAMD51 +    │
+│  server.py           │ ────────────► │   ESP32 WiFi)    │
+│  - session data      │               │                  │
+│  - usage API         │               │  code.py         │
+│  - auth: Bearer      │               │  - renders bars  │
+│                      │               │  - shows sessions│
+│  Hook scripts:       │               │  - pulses alerts │
+│  - Stop: waiting     │               │                  │
+│  - PreToolUse: pending               │  64x32 LED panel │
+│  - PostToolUse: clear│               └──────────────────┘
+└──────────────────────┘
 ```
+
+Three Claude Code hooks track session state:
+- **Stop** (`matrix-stop.sh`): marks session as "waiting" (turn complete, needs user input)
+- **PreToolUse** (`matrix-resume.sh`): clears the waiting flag, writes a "pending" flag (tool in progress)
+- **PostToolUse** (`matrix-complete.sh`): clears the pending flag (tool finished)
+
+The server derives a **blocked** state from pending flag age: if a pending flag lingers >10 seconds, a permission prompt is likely blocking the session. After 60 seconds, stale pending flags decay to "waiting".
 
 Only **named** Claude Code sessions appear (started with `--name` or renamed with `/rename`). Unnamed sessions are invisible to the display.
 
@@ -40,11 +48,20 @@ Only **named** Claude Code sessions appear (started with `--name` or renamed wit
 
 Download the latest CircuitPython 9.x UF2 for [Matrix Portal M4](https://circuitpython.org/board/matrixportal_m4/) and flash it.
 
-### 2. Install CircuitPython Libraries
+### 2. Install Prerequisites + CircuitPython Libraries
 
+The host installer requires `jq` for JSON processing:
+```bash
+# macOS
+brew install jq
+# Linux (Debian/Ubuntu)
+sudo apt install jq
+```
+
+Install CircuitPython libraries to the board:
 ```bash
 pip install circup
-circup install adafruit_display_text adafruit_bitmap_font adafruit_requests adafruit_connection_manager
+circup install adafruit_display_text adafruit_bitmap_font adafruit_esp32spi adafruit_requests adafruit_connection_manager
 ```
 
 ### 3. Copy Display Code
@@ -83,18 +100,17 @@ curl -s -H "Authorization: Bearer YOUR_SECRET" http://localhost:8321/status | py
 ┌──────────────────────────── 64px ─────────────────────────────┐
 │  5h ▓▓▓▓░░░░░░ 21%        usage bars (green/yellow/red)     │
 │  7d ▓▓▓▓▓▓▓░░░ 47%                                          │
-│  ── 2/5 waiting ──         separator with counts             │
-│  ◆ pipeline-upgrade        waiting: amber pulse              │
-│  ◆ statusline              waiting: amber pulse              │
+│  ────────────────────      separator line                     │
+│  ◆ pipeline-upgrade        blocked: red pulse                │
 │  ● my-feature              working: green, cycles            │
 └───────────────────────────────────────────────────────────────┘
 ```
 
-When a session transitions to "waiting", a full-screen flash alerts you.
+Session states: **working** (green dot), **waiting** (amber pulse — needs user input), **blocked** (red pulse — permission prompt). When a session transitions to waiting or blocked, a full-screen flash alerts you. With more sessions than slots, working sessions cycle automatically.
 
 ## Configuration
 
-### Server (`host/config.json`)
+### Server (`~/.cc-matrix/config.json`)
 
 ```json
 {
@@ -122,6 +138,8 @@ POLL_INTERVAL_S = "5"
 | Linux | `~/.claude/.credentials.json` (automatic) | systemd user service |
 
 The server reads your existing Claude Code OAuth token directly from `~/.claude/.credentials.json` — no manual key setup required. Just be logged into Claude Code.
+
+**Linux note:** Run `loginctl enable-linger $(whoami)` to keep the systemd service running after logout.
 
 ## Security
 
@@ -214,7 +232,7 @@ while True:
 "
 ```
 
-The serial port path may vary — check `ls /dev/cu.usbmodem*`.
+The serial port path may vary — check `ls /dev/cu.usbmodem*` (macOS) or `ls /dev/ttyACM*` (Linux).
 
 ## Uninstalling
 
