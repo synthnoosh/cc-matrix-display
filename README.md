@@ -46,13 +46,11 @@ This display **only tracks named Claude Code sessions**. Unnamed sessions are in
 
 To name a session:
 - Start with a name: `claude --name my-feature`
-- Name an existing session: type `/name my-feature` in the Claude Code prompt
+- Name an existing session: type `/rename my-session` in Claude Code
 
 The server reads `~/.claude/sessions/*.json` and filters for entries with a `"name"` field. Only sessions with a live process (PID check) are included.
 
 ## Quick Start
-
-> **New to hardware?** You can point your AI coding agent (Claude Code, Cursor, etc.) at this README and ask it to walk you through the setup end-to-end. The instructions below are written to be both human- and agent-readable.
 
 ### 1. Assemble the Hardware
 
