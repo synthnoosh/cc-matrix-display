@@ -16,7 +16,9 @@ Priority pinning: waiting sessions always pinned to top slots.
 """
 
 import gc
+import microcontroller
 import os
+import supervisor
 import time
 import board
 import bitmaptools
@@ -27,6 +29,7 @@ import rgbmatrix
 import terminalio
 import vectorio
 from digitalio import DigitalInOut
+from watchdog import WatchDogMode
 
 from adafruit_bitmap_font import bitmap_font
 from adafruit_display_text import label
@@ -329,9 +332,19 @@ def connect_wifi():
 session = None
 
 
-def init_http():
-    """Create a fresh adafruit_requests Session."""
+def init_http(hard_reset=False):
+    """Create a fresh HTTP session. Hard reset power-cycles the ESP32 coprocessor."""
     global session
+    if hard_reset:
+        print("Hard-resetting ESP32...")
+        esp.reset()
+        time.sleep(1)
+        if not esp.is_connected:
+            connect_wifi()
+    try:
+        adafruit_connection_manager.connection_manager_close_all(esp)
+    except Exception:
+        pass
     pool = adafruit_connection_manager.get_radio_socketpool(esp)
     ssl_ctx = adafruit_connection_manager.get_radio_ssl_context(esp)
     session = adafruit_requests.Session(pool, ssl_ctx)
@@ -620,14 +633,10 @@ def tick_poll(now):
             init_http()
         elif s["poll_failures"] >= 5:
             current_sessions = []
-            if not esp.is_connected:
-                show_offline()
-                connect_wifi()
-                if esp.is_connected:
-                    init_http()
-                    s["poll_failures"] = 0
-            else:
-                show_offline()
+            show_offline()
+            # Hard-reset ESP32 to clear all socket state
+            init_http(hard_reset=True)
+            s["poll_failures"] = 0
 
 
 def tick_scroll(now):
@@ -789,7 +798,14 @@ def main():
     time.sleep(0.5)
     display.root_group = root
 
+    # Enable hardware watchdog — resets chip if main loop freezes for >30s
+    # (HTTP timeout is 10s, so 30s covers worst case with margin)
+    wdt = microcontroller.watchdog
+    wdt.timeout = 16
+    wdt.mode = WatchDogMode.RESET
+
     while True:
+        wdt.feed()
         now = time.monotonic()
         tick_flash(now)
         tick_bar_animation(now)
@@ -802,4 +818,21 @@ def main():
         time.sleep(0.01)
 
 
-main()
+# ---------------------------------------------------------------------------
+# Crash-recovery wrapper — restarts main() on any exception
+# ---------------------------------------------------------------------------
+
+while True:
+    try:
+        main()
+    except KeyboardInterrupt:
+        break
+    except Exception as e:
+        print(f"CRASH: {e}")
+        # Disable watchdog during recovery pause
+        try:
+            microcontroller.watchdog.mode = None
+        except Exception:
+            pass
+        time.sleep(5)
+        supervisor.reload()
