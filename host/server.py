@@ -10,6 +10,7 @@ Usage:
     CC_MATRIX_PORT=8321 python3 server.py
 """
 
+import hmac
 import json
 import logging
 import os
@@ -52,7 +53,10 @@ def load_config(path=None):
         with open(p) as f:
             cfg.update(json.load(f))
     # Environment overrides
-    cfg["port"] = int(os.environ.get("CC_MATRIX_PORT", cfg["port"]))
+    try:
+        cfg["port"] = int(os.environ.get("CC_MATRIX_PORT", cfg["port"]))
+    except ValueError:
+        raise ValueError(f"Invalid port value: {os.environ.get('CC_MATRIX_PORT', cfg['port'])!r} — must be an integer")
     cfg["secret"] = os.environ.get("CC_MATRIX_SECRET", cfg["secret"])
     cfg["bind"] = os.environ.get("CC_MATRIX_BIND", cfg["bind"])
     cfg["anthropic_beta"] = os.environ.get("CC_MATRIX_ANTHROPIC_BETA", cfg["anthropic_beta"])
@@ -254,7 +258,7 @@ class MatrixHandler(BaseHTTPRequestHandler):
         if not secret:
             return True
         auth = self.headers.get("Authorization", "")
-        return auth == f"Bearer {secret}"
+        return hmac.compare_digest(auth, f"Bearer {secret}")
 
     def _json_response(self, status, data):
         body = json.dumps(data).encode()
