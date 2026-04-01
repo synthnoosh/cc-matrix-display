@@ -60,6 +60,8 @@ SESSION_SLOTS = 2
 SESSION_START_Y = 15  # first session row y
 SESSION_ROW_HEIGHT = 9  # per row
 SCROLL_SPEED = 0.3  # seconds between character scroll steps
+SCROLL_PAUSE = 2.0  # seconds to show name start before scrolling
+SCROLL_END_PAUSE = 3.0  # seconds to show name end before resetting
 PULSE_SPEED = 0.5  # seconds between pulse toggles
 CYCLE_SPEED = 4.0  # seconds between session group rotation
 FLASH_DURATION = 5.0  # seconds for full-screen alert
@@ -322,34 +324,33 @@ def format_pct(pct):
 current_sessions = []  # full list from server
 prev_session_names_waiting = set()  # for transition detection
 display_offset = 0  # for cycling through sessions
-scroll_positions = [0] * SESSION_SLOTS  # x offset for each label
+scroll_names = [""] * SESSION_SLOTS    # last name shown per slot
+scroll_offsets = [0] * SESSION_SLOTS   # current scroll position per slot
+scroll_phase = "idle"                  # idle | pause | scroll | done
+scroll_timer = 0.0                     # monotonic time for phase transitions
 
 
 def get_visible_sessions():
-    """Apply priority pinning: blocked/waiting first, then working in cycle slots."""
-    attention = [s for s in current_sessions if s["status"] in ("blocked", "waiting")]
-    working = [s for s in current_sessions if s["status"] == "working"]
+    """Return sessions visible on display, paging through all when they exceed slots.
 
+    Priority sort: blocked first, then waiting, then working.
+    When all sessions fit in SESSION_SLOTS, show them all.
+    When they don't, page through in groups of SESSION_SLOTS.
+    """
+    all_sorted = sorted(
+        current_sessions,
+        key=lambda s: {"blocked": 0, "waiting": 1, "working": 2}.get(s["status"], 2),
+    )
+
+    if len(all_sorted) <= SESSION_SLOTS:
+        return all_sorted
+
+    # Page through all sessions in slot-sized groups
+    start = (display_offset * SESSION_SLOTS) % len(all_sorted)
     visible = []
-    # Pin attention-needing sessions to top slots
-    for i, s in enumerate(attention[:SESSION_SLOTS]):
-        visible.append(s)
-
-    # Fill remaining slots with cycling working sessions
-    remaining_slots = SESSION_SLOTS - len(visible)
-    if remaining_slots > 0 and working:
-        start = display_offset % len(working) if working else 0
-        for i in range(remaining_slots):
-            idx = (start + i) % len(working)
-            visible.append(working[idx])
-    elif remaining_slots <= 0 and len(attention) > SESSION_SLOTS:
-        # More attention-needing than slots: cycle among them
-        start = display_offset % len(attention)
-        visible = []
-        for i in range(SESSION_SLOTS):
-            idx = (start + i) % len(attention)
-            visible.append(attention[idx])
-
+    for i in range(SESSION_SLOTS):
+        idx = (start + i) % len(all_sorted)
+        visible.append(all_sorted[idx])
     return visible
 
 
@@ -393,7 +394,6 @@ def update_display(data):
             name = s["name"]
             status = s["status"]
 
-            session_labels[i].text = name
             if status == "blocked":
                 session_labels[i].color = COLOR_WHITE
                 session_dots[i].color = COLOR_RED_BRIGHT
@@ -405,8 +405,6 @@ def update_display(data):
                 session_dots[i].color = COLOR_GREEN
 
             session_dots[i].text = "*"
-
-            scroll_positions[i] = 0
         else:
             session_labels[i].text = ""
             session_dots[i].text = " "
@@ -458,7 +456,7 @@ def show_no_sessions():
 
 
 def main():
-    global display_offset, current_sessions
+    global display_offset, current_sessions, scroll_phase, scroll_timer
 
     # WiFi (boot_group still showing during connect)
     if not connect_wifi():
@@ -474,7 +472,6 @@ def main():
 
     # Timers (monotonic)
     last_poll = 0
-    last_scroll = 0
     last_pulse = 0
     last_cycle = 0
     flash_start = 0
@@ -519,19 +516,66 @@ def main():
                     else:
                         show_offline()
 
-        # --- Scroll long names (text-window, never spills past left border) ---
-        if not is_flashing and now - last_scroll > SCROLL_SPEED:
-            last_scroll = now
+        # --- Scroll long names (phase-based, synchronized, one-shot) ---
+        if not is_flashing and current_sessions:
             visible = get_visible_sessions()
             max_chars = (WIDTH - 7) // 5  # visible chars at 5px/char
-            for i in range(min(len(visible), SESSION_SLOTS)):
-                name = visible[i]["name"]
-                if len(name) > max_chars:
-                    padded = name + "    " + name
-                    scroll_positions[i] = (scroll_positions[i] + 1) % (len(name) + 4)
-                    session_labels[i].text = padded[scroll_positions[i]:scroll_positions[i] + max_chars]
+
+            # Detect name changes → restart scroll cycle
+            changed = False
+            for i in range(SESSION_SLOTS):
+                name = visible[i]["name"] if i < len(visible) else ""
+                if name != scroll_names[i]:
+                    changed = True
+                    scroll_names[i] = name
+                    scroll_offsets[i] = 0
+                    session_labels[i].text = name[:max_chars] if name else ""
+
+            if changed:
+                scroll_phase = "pause"
+                scroll_timer = now
+
+            # Phase: pause → start scrolling (or done if no scroll needed)
+            if scroll_phase == "pause" and now - scroll_timer >= SCROLL_PAUSE:
+                needs_scroll = any(
+                    len(scroll_names[i]) > max_chars
+                    for i in range(SESSION_SLOTS)
+                )
+                if needs_scroll:
+                    scroll_phase = "scroll"
+                    scroll_timer = now
                 else:
-                    session_labels[i].text = name
+                    scroll_phase = "done"
+
+            # Phase: scroll → advance one character per SCROLL_SPEED
+            elif scroll_phase == "scroll" and now - scroll_timer >= SCROLL_SPEED:
+                scroll_timer = now
+                all_done = True
+                for i in range(min(len(visible), SESSION_SLOTS)):
+                    name = scroll_names[i]
+                    max_offset = len(name) - max_chars
+                    if max_offset > 0 and scroll_offsets[i] < max_offset:
+                        scroll_offsets[i] += 1
+                        pos = scroll_offsets[i]
+                        session_labels[i].text = name[pos:pos + max_chars]
+                        if scroll_offsets[i] < max_offset:
+                            all_done = False
+                if all_done:
+                    scroll_phase = "hold"
+                    scroll_timer = now
+
+            # Phase: hold → show end for SCROLL_END_PAUSE, then reset to start
+            elif scroll_phase == "hold" and now - scroll_timer >= SCROLL_END_PAUSE:
+                for i in range(min(len(visible), SESSION_SLOTS)):
+                    scroll_offsets[i] = 0
+                    name = scroll_names[i]
+                    session_labels[i].text = name[:max_chars] if name else ""
+                scroll_phase = "settle"
+                scroll_timer = now
+
+            # Phase: settle → dwell on start for SCROLL_END_PAUSE before allowing cycle
+            elif scroll_phase == "settle" and now - scroll_timer >= SCROLL_END_PAUSE:
+                scroll_phase = "done"
 
         # --- Pulse waiting dots ---
         if not is_flashing and now - last_pulse > PULSE_SPEED:
@@ -545,19 +589,15 @@ def main():
                 elif st == "waiting":
                     session_dots[i].color = COLOR_AMBER if pulse_on else COLOR_AMBER_DIM
 
-        # --- Cycle working sessions ---
-        if not is_flashing and now - last_cycle > CYCLE_SPEED:
+        # --- Cycle sessions (wait for scroll to finish) ---
+        if not is_flashing and scroll_phase in ("idle", "done") and now - last_cycle > CYCLE_SPEED:
             last_cycle = now
-            attention = [s for s in current_sessions if s["status"] in ("blocked", "waiting")]
-            working = [s for s in current_sessions if s["status"] == "working"]
-            remaining_slots = max(0, SESSION_SLOTS - len(attention))
-            if len(working) > remaining_slots:
+            if len(current_sessions) > SESSION_SLOTS:
                 display_offset += 1
                 visible = get_visible_sessions()
                 for i in range(SESSION_SLOTS):
                     if i < len(visible):
                         s = visible[i]
-                        session_labels[i].text = s["name"]
                         st = s["status"]
                         session_labels[i].color = COLOR_WHITE if st != "working" else COLOR_WHITE_DIM
                         session_dots[i].text = "*"
@@ -567,7 +607,6 @@ def main():
                             session_dots[i].color = COLOR_AMBER
                         else:
                             session_dots[i].color = COLOR_GREEN
-                        scroll_positions[i] = 0
 
         # Small sleep to prevent tight-looping
         time.sleep(0.01)
