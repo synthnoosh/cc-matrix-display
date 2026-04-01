@@ -347,9 +347,10 @@ def init_http(hard_reset=False):
     if hard_reset:
         print("Hard-resetting ESP32...")
         esp.reset()
-        time.sleep(1)
+        time.sleep(2)
         if not esp.is_connected:
             connect_wifi()
+            time.sleep(1)
     try:
         adafruit_connection_manager.connection_manager_close_all(esp)
     except Exception:
@@ -357,9 +358,6 @@ def init_http(hard_reset=False):
     pool = adafruit_connection_manager.get_radio_socketpool(esp)
     ssl_ctx = adafruit_connection_manager.get_radio_ssl_context(esp)
     session = adafruit_requests.Session(pool, ssl_ctx)
-
-
-_successful_polls = 0
 
 
 def fetch_status():
@@ -375,25 +373,23 @@ def fetch_status():
     try:
         resp = session.get(STATUS_URL, headers=headers, timeout=5)
         data = resp.json()
-        _successful_polls += 1
-        # Preemptive cleanup every ~5 min to prevent slow socket accumulation
-        if _successful_polls % 60 == 0:
-            print("Preemptive connection cleanup")
-            try:
-                adafruit_connection_manager.connection_manager_close_all(esp)
-            except Exception:
-                pass
         return data
     except (OSError, ValueError, RuntimeError) as e:
         print(f"Fetch error: {e}")
         return None
     finally:
-        # ALWAYS close the response to release the socket back to the pool
+        # Close response + force-release ALL sockets after every request.
+        # The ESP32 SPI firmware leaks sockets even after Python-side close,
+        # so we nuke the entire pool every time. Overhead is negligible at 5s.
         if resp is not None:
             try:
                 resp.close()
             except Exception:
                 pass
+        try:
+            adafruit_connection_manager.connection_manager_close_all(esp)
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
