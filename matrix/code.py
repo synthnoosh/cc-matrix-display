@@ -72,6 +72,15 @@ PULSE_SPEED = 0.5  # seconds between pulse toggles
 CYCLE_SPEED = 4.0  # seconds between session group rotation
 FLASH_DURATION = 5.0  # seconds for full-screen alert
 
+# Idle mode — activates after no data changes for IDLE_TIMEOUT
+IDLE_TIMEOUT = 300          # 5 minutes
+ACTIVE_BRIGHTNESS = 0.85
+IDLE_BRIGHTNESS = 0.50
+IDLE_CYCLE_SPEED = 120.0    # 2 minutes between page turns
+IDLE_PULSE_SPEED = 1.5      # slower dot pulsing
+BRIGHTNESS_FADE_STEP = 0.05
+BRIGHTNESS_FADE_INTERVAL = 0.2  # ~7 steps over ~1.4s
+
 # Colors (24-bit hex — displayio converts to RGB565, bit_depth=3 quantizes further)
 COLOR_GREEN = 0x00AA00
 COLOR_YELLOW = 0xCCCC00
@@ -439,6 +448,21 @@ BREATHE_TEXT_COLORS = (0x333333, 0x444444, 0x555555, 0x444444)
 BREATHE_INTERVAL = 1.0  # seconds per step
 breathe_step = 0
 
+# Idle mode activity tracking (persisted across reboots via NVM byte 0)
+NVM_IDLE_BYTE = 0
+_was_idle_before_reboot = microcontroller.nvm[NVM_IDLE_BYTE] == 1
+_idle = {
+    "last_activity": 0.0,
+    "is_idle": _was_idle_before_reboot,
+    "target_brightness": IDLE_BRIGHTNESS if _was_idle_before_reboot else ACTIVE_BRIGHTNESS,
+    "prev_sessions": None,
+    "prev_5h": -1,
+    "prev_7d": -1,
+}
+# If resuming idle after reboot, set brightness immediately (no fade)
+if _was_idle_before_reboot:
+    display.brightness = IDLE_BRIGHTNESS
+
 
 def get_visible_sessions():
     """Return sessions visible on display, paging through all when they exceed slots.
@@ -577,6 +601,7 @@ def show_no_sessions():
 _timers = {
     "poll": 0, "pulse": 0, "cycle": 0, "bar_anim": 0,
     "flash_wipe": 0, "slide": 0, "breathe": 0, "flash_start": 0,
+    "brightness": 0,
 }
 _state = {
     "pulse_on": True, "is_flashing": False,
@@ -644,6 +669,20 @@ def tick_poll(now):
         s["first_poll"] = False
         if not data.get("sessions"):
             show_no_sessions()
+        # Detect activity for idle mode
+        usage = data.get("usage", {})
+        cur_5h = usage.get("five_hour", {}).get("pct", 0)
+        cur_7d = usage.get("seven_day", {}).get("pct", 0)
+        cur_sessions = tuple(
+            (ss["name"], ss["status"]) for ss in data.get("sessions", [])
+        )
+        if (cur_sessions != _idle["prev_sessions"]
+                or cur_5h != _idle["prev_5h"]
+                or cur_7d != _idle["prev_7d"]):
+            _idle["last_activity"] = now
+            _idle["prev_sessions"] = cur_sessions
+            _idle["prev_5h"] = cur_5h
+            _idle["prev_7d"] = cur_7d
         gc.collect()
     else:
         s["poll_failures"] += 1
@@ -657,6 +696,34 @@ def tick_poll(now):
             show_offline()
             init_http(hard_reset=True)
             s["poll_failures"] = 0
+
+
+def tick_idle(now):
+    """Manage idle mode: dim display and slow animations when nothing changes."""
+    was_idle = _idle["is_idle"]
+    # If we resumed idle from a reboot, stay idle until activity is detected
+    if _idle["last_activity"] == 0.0:
+        _idle["is_idle"] = was_idle  # preserve reboot state until first data change
+    else:
+        _idle["is_idle"] = (now - _idle["last_activity"]) > IDLE_TIMEOUT
+
+    if _idle["is_idle"] != was_idle:
+        if _idle["is_idle"]:
+            _idle["target_brightness"] = IDLE_BRIGHTNESS
+        else:
+            _idle["target_brightness"] = ACTIVE_BRIGHTNESS
+        # Persist to NVM so reboots preserve idle state
+        microcontroller.nvm[NVM_IDLE_BYTE] = 1 if _idle["is_idle"] else 0
+
+    # Smooth brightness fade
+    target = _idle["target_brightness"]
+    current = display.brightness
+    if abs(current - target) > 0.01 and now - _timers["brightness"] > BRIGHTNESS_FADE_INTERVAL:
+        _timers["brightness"] = now
+        if current < target:
+            display.brightness = min(target, current + BRIGHTNESS_FADE_STEP)
+        else:
+            display.brightness = max(target, current - BRIGHTNESS_FADE_STEP)
 
 
 def tick_scroll(now):
@@ -731,7 +798,8 @@ def tick_breathe(now):
 def tick_pulse(now):
     """Pulse waiting/blocked status dots via palette mutation."""
     s = _state
-    if s["is_flashing"] or now - _timers["pulse"] <= PULSE_SPEED:
+    pulse_speed = IDLE_PULSE_SPEED if _idle["is_idle"] else PULSE_SPEED
+    if s["is_flashing"] or now - _timers["pulse"] <= pulse_speed:
         return
     _timers["pulse"] = now
     s["pulse_on"] = not s["pulse_on"]
@@ -751,7 +819,8 @@ def tick_cycle(now):
         return
     if scroll_phase not in ("idle", "done"):
         return
-    if now - _timers["cycle"] <= CYCLE_SPEED:
+    cycle_speed = IDLE_CYCLE_SPEED if _idle["is_idle"] else CYCLE_SPEED
+    if now - _timers["cycle"] <= cycle_speed:
         return
     _timers["cycle"] = now
     if len(current_sessions) > SESSION_SLOTS:
@@ -818,8 +887,7 @@ def main():
     time.sleep(0.5)
     display.root_group = root
 
-    # Enable hardware watchdog — resets chip if main loop freezes for >30s
-    # (HTTP timeout is 10s, so 30s covers worst case with margin)
+    # Enable hardware watchdog — resets chip if main loop freezes for >16s
     wdt = microcontroller.watchdog
     wdt.timeout = 16
     wdt.mode = WatchDogMode.RESET
@@ -830,6 +898,7 @@ def main():
         tick_flash(now)
         tick_bar_animation(now)
         tick_poll(now)
+        tick_idle(now)
         tick_scroll(now)
         tick_breathe(now)
         tick_pulse(now)
