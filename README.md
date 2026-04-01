@@ -11,26 +11,26 @@ A physical desk dashboard for [Claude Code](https://docs.anthropic.com/en/docs/c
 
 | Component | Link |
 |-|-|
-| Adafruit Matrix Portal M4 | [adafruit.com/product/4745](https://www.adafruit.com/product/4745) |
-| 64x32 RGB LED Matrix Panel (4mm pitch) | [adafruit.com/product/2278](https://www.adafruit.com/product/2278) |
-| USB-C cable | For power and initial programming |
+| Adafruit Matrix Portal M4 | [thepihut.com](https://thepihut.com/products/adafruit-matrix-portal-circuitpython-powered-internet-display) |
+| 64x32 RGB LED Matrix Panel (4mm pitch) | [thepihut.com](https://thepihut.com/products/rgb-full-colour-led-matrix-panel-4mm-pitch-64x32-pixels) |
+| USB-C data cable | For power and programming (must support data, not charge-only) |
 
 ## How It Works
 
 ```
-┌──────────────────────┐   HTTP/JSON   ┌──────────────────┐
-│  Your Mac/Linux      │ ◄──────────── │  Matrix Portal   │
-│                      │   :8321       │  M4 (SAMD51 +    │
-│  server.py           │ ────────────► │   ESP32 WiFi)    │
-│  - session data      │               │                  │
-│  - usage API         │               │  code.py         │
-│  - auth: Bearer      │               │  - renders bars  │
-│                      │               │  - shows sessions│
-│  Hook scripts:       │               │  - pulses alerts │
-│  - Stop: waiting     │               │                  │
-│  - PreToolUse: pending               │  64x32 LED panel │
-│  - PostToolUse: clear│               └──────────────────┘
-└──────────────────────┘
+┌─────────────────────────┐              ┌──────────────────┐
+│  Your Mac/Linux         │  HTTP/JSON   │  Matrix Portal   │
+│                         │ ◄─────────── │  M4 (SAMD51 +    │
+│  server.py              │    :8321     │   ESP32 WiFi)    │
+│  - session data         │ ───────────► │                  │
+│  - usage API            │              │  code.py         │
+│  - auth: Bearer         │              │  - renders bars  │
+│                         │              │  - shows sessions│
+│  Hooks:                 │              │  - pulses alerts │
+│  - Stop: waiting        │              │                  │
+│  - PreToolUse: pending  │              │  64x32 LED panel │
+│  - PostToolUse: clear   │              └──────────────────┘
+└─────────────────────────┘
 ```
 
 Three Claude Code hooks track session state:
@@ -40,15 +40,36 @@ Three Claude Code hooks track session state:
 
 The server derives a **blocked** state from pending flag age: if a pending flag lingers >10 seconds, a permission prompt is likely blocking the session. After 60 seconds, stale pending flags decay to "waiting".
 
-Only **named** Claude Code sessions appear (started with `--name` or renamed with `/rename`). Unnamed sessions are invisible to the display.
+### Named Sessions
+
+This display **only tracks named Claude Code sessions**. Unnamed sessions are invisible to it. This is by design: you control which sessions appear on your dashboard by choosing to name them.
+
+To name a session:
+- Start with a name: `claude --name my-feature`
+- Name an existing session: type `/name my-feature` in the Claude Code prompt
+
+The server reads `~/.claude/sessions/*.json` and filters for entries with a `"name"` field. Only sessions with a live process (PID check) are included.
 
 ## Quick Start
 
-### 1. Flash CircuitPython
+> **New to hardware?** You can point your AI coding agent (Claude Code, Cursor, etc.) at this README and ask it to walk you through the setup end-to-end. The instructions below are written to be both human- and agent-readable.
 
-Download the latest CircuitPython 9.x UF2 for [Matrix Portal M4](https://circuitpython.org/board/matrixportal_m4/) and flash it.
+### 1. Assemble the Hardware
 
-### 2. Install Prerequisites + CircuitPython Libraries
+1. Slot the Matrix Portal M4 onto the back of the 64x32 LED panel — the pin headers on the board align with the HUB75 connector on the panel. Press firmly until seated.
+2. Connect a USB-C **data** cable (not charge-only) from the Matrix Portal to your computer.
+
+### 2. Flash CircuitPython
+
+This installs the CircuitPython runtime on the board. You only need to do this once.
+
+1. Download the latest CircuitPython 9.x `.uf2` file for the Matrix Portal M4 from [circuitpython.org/board/matrixportal_m4](https://circuitpython.org/board/matrixportal_m4/).
+2. **Enter bootloader mode**: double-tap the **Reset** button on the Matrix Portal. The onboard NeoPixel LED should turn **green**. If it turns red, try a different USB cable or port.
+3. A drive called **MATRIXBOOT** will appear on your computer.
+4. Drag the downloaded `.uf2` file onto the **MATRIXBOOT** drive. The LED will flash as it writes.
+5. When complete, **MATRIXBOOT** disappears and a new drive called **CIRCUITPY** appears. CircuitPython is now installed.
+
+### 3. Install Prerequisites
 
 The host installer requires `jq` for JSON processing:
 ```bash
@@ -58,26 +79,35 @@ brew install jq
 sudo apt install jq
 ```
 
-Install CircuitPython libraries to the board:
+### 4. Install CircuitPython Libraries
+
+With the board connected and the CIRCUITPY drive mounted:
 ```bash
 pip install circup
 circup install adafruit_display_text adafruit_bitmap_font adafruit_esp32spi adafruit_requests adafruit_connection_manager
 ```
 
-### 3. Copy Display Code
+### 5. Copy Display Code
 
 Copy the contents of `matrix/` to your CIRCUITPY drive:
 ```bash
+# macOS
 cp -r matrix/* /Volumes/CIRCUITPY/
+# Linux
+cp -r matrix/* /media/$USER/CIRCUITPY/
 ```
 
 Then create your config:
 ```bash
+# macOS
 cp /Volumes/CIRCUITPY/settings.toml.example /Volumes/CIRCUITPY/settings.toml
-# Edit settings.toml with your WiFi credentials and server URL
+# Linux
+cp /media/$USER/CIRCUITPY/settings.toml.example /media/$USER/CIRCUITPY/settings.toml
 ```
 
-### 4. Install Host Server + Hooks
+Edit `settings.toml` on the CIRCUITPY drive with your WiFi credentials and server URL (see [Configuration](#configuration) below).
+
+### 6. Install Host Server + Hooks
 
 ```bash
 ./host/install.sh
@@ -87,12 +117,15 @@ This will:
 - Generate a shared secret for secure communication
 - Install Claude Code hooks for session monitoring
 - Set up the server as a background service (launchd on macOS, systemd on Linux)
+- Print the secret and URL to put in your `settings.toml`
 
-### 5. Verify
+### 7. Verify
 
 ```bash
 curl -s -H "Authorization: Bearer YOUR_SECRET" http://localhost:8321/status | python3 -m json.tool
 ```
+
+The board will reboot automatically after you copied the files. If everything is connected, you should see usage bars appear on the LED panel within a few seconds.
 
 ## Display Layout
 
