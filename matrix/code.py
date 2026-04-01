@@ -105,6 +105,7 @@ matrix = rgbmatrix.RGBMatrix(
 )
 
 display = framebufferio.FramebufferDisplay(matrix, auto_refresh=True)
+display.brightness = 0.85
 
 # Show boot splash before WiFi init (which can take several seconds)
 boot_group = displayio.Group()
