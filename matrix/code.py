@@ -350,22 +350,41 @@ def init_http(hard_reset=False):
     session = adafruit_requests.Session(pool, ssl_ctx)
 
 
+_successful_polls = 0
+
+
 def fetch_status():
     """Fetch /status from the host server. Returns data dict or None on failure."""
-    if session is None:
+    global _successful_polls
+    if session is None or not esp.is_connected:
         return None
 
     headers = {"Connection": "close"}
     if SECRET:
         headers["Authorization"] = f"Bearer {SECRET}"
+    resp = None
     try:
-        resp = session.get(STATUS_URL, headers=headers, timeout=10)
+        resp = session.get(STATUS_URL, headers=headers, timeout=5)
         data = resp.json()
-        resp.close()
+        _successful_polls += 1
+        # Preemptive cleanup every ~5 min to prevent slow socket accumulation
+        if _successful_polls % 60 == 0:
+            print("Preemptive connection cleanup")
+            try:
+                adafruit_connection_manager.connection_manager_close_all(esp)
+            except Exception:
+                pass
         return data
     except (OSError, ValueError, RuntimeError) as e:
         print(f"Fetch error: {e}")
         return None
+    finally:
+        # ALWAYS close the response to release the socket back to the pool
+        if resp is not None:
+            try:
+                resp.close()
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -628,13 +647,14 @@ def tick_poll(now):
         gc.collect()
     else:
         s["poll_failures"] += 1
-        if s["poll_failures"] == 2:
+        if s["poll_failures"] == 1:
+            # First failure: soft rebuild (close stale sockets, new session)
             print("Rebuilding HTTP session...")
             init_http()
-        elif s["poll_failures"] >= 5:
+        elif s["poll_failures"] >= 3:
+            # Third failure: hard-reset ESP32 coprocessor
             current_sessions = []
             show_offline()
-            # Hard-reset ESP32 to clear all socket state
             init_http(hard_reset=True)
             s["poll_failures"] = 0
 
