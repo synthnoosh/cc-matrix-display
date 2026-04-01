@@ -6,6 +6,7 @@ A physical desk dashboard for [Claude Code](https://docs.anthropic.com/en/docs/c
 - Shows your Claude Code **usage limits** (5-hour and 7-day rolling windows) as color-coded progress bars
 - Monitors your **named sessions** and alerts you when any session is waiting for input
 - Priority-pinned display: waiting sessions are always visible; working sessions cycle through remaining slots
+- Works over WiFi once initial setup is complete
 
 ## Hardware
 
